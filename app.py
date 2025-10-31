@@ -164,5 +164,39 @@ def index():
     return render_template("index.html", text=extracted_text, summary=summary_text, bullets=bullet_text)
 
 
+@app.route("/index2", methods=["GET", "POST"])
+def index2():
+    extracted_text = None
+    summary_text = None
+    bullet_text = None
+
+    if request.method == "POST":
+        if "recorded" in request.files:
+            file = request.files["recorded"]
+            if file:
+                video_path = os.path.join(app.config['UPLOAD_FOLDER'], "recorded.webm")
+                file.save(video_path)
+                print("🎥 Video recorded and uploaded successfully!")
+
+                # Step 1: Extract Audio
+                audio_path = extract_audio(video_path)
+
+                # Step 2: Transcribe
+                extracted_text = convert_and_transcribe(audio_path)
+
+                # Step 3: Save extracted text
+                with open(os.path.join(app.config['UPLOAD_FOLDER'], "extract.txt"), "w", encoding="utf-8") as f:
+                    f.write(extracted_text)
+
+                # Step 4: Summarize
+                summary_text = summarize_text("static/uploads/extract.txt")
+
+                # Step 5: Convert to bullet points
+                bullet_text = convert_to_bullets("static/uploads/summary.txt")
+
+    return render_template("index2.html", text=extracted_text, summary=summary_text, bullets=bullet_text)
+
+
+
 if __name__ == "__main__":
     app.run(debug=True)
