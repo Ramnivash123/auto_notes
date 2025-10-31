@@ -4,6 +4,9 @@ from flask import Flask, render_template, request
 from moviepy import VideoFileClip, AudioFileClip
 import speech_recognition as sr
 from transformers import PegasusTokenizer, PegasusForConditionalGeneration
+from flask import send_file
+
+
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = "static/uploads"
@@ -196,6 +199,15 @@ def index2():
 
     return render_template("index2.html", text=extracted_text, summary=summary_text, bullets=bullet_text)
 
+
+@app.route("/download_txt", methods=["POST"])
+def download_txt():
+    txt_path = os.path.join(app.config['UPLOAD_FOLDER'], "bullet_summary.txt")
+    
+    if not os.path.exists(txt_path):
+        return "❌ No bullet summary found. Please generate it first."
+    
+    return send_file(txt_path, as_attachment=True)
 
 
 if __name__ == "__main__":
