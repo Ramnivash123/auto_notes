@@ -12,7 +12,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # -----------------------------
 # Load Pegasus model once
 # -----------------------------
-os.environ["HF_TOKEN"] = "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"
+os.environ["HF_TOKEN"] = ""
 model_name = "google/pegasus-cnn_dailymail"
 
 print("🔹 Loading Pegasus model...")
@@ -105,12 +105,35 @@ def summarize_text(input_file="static/uploads/extract.txt", output_file="static/
 
 
 # -----------------------------
+# Helper: Convert summary → bullet points
+# -----------------------------
+def convert_to_bullets(summary_file="static/uploads/summary.txt", output_file="static/uploads/bullet_summary.txt"):
+    if not os.path.exists(summary_file):
+        return "❌ 'summary.txt' not found."
+
+    with open(summary_file, "r", encoding="utf-8") as f:
+        summary = f.read().strip()
+
+    summary = summary.replace("<n>", ". ")
+    sentences = [s.strip() for s in summary.split(".") if s.strip()]
+
+    bullet_points = "\n".join([f"• {s}." for s in sentences])
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(bullet_points)
+
+    print(f"💾 Bullet-point summary saved to '{output_file}'")
+    return bullet_points
+
+
+# -----------------------------
 # Routes
 # -----------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     extracted_text = None
     summary_text = None
+    bullet_text = None
 
     if request.method == "POST":
         # Check which button was pressed
@@ -132,15 +155,13 @@ def index():
 
         elif "summarize" in request.form:
             summary_text = summarize_text("static/uploads/extract.txt")
-
-            with open(os.path.join(app.config['UPLOAD_FOLDER'], "summary.txt"), "w", encoding="utf-8") as f:
-                f.write(summary_text)
+            bullet_text = convert_to_bullets("static/uploads/summary.txt")
 
             # Read extracted text for display alongside summary
             with open(os.path.join(app.config['UPLOAD_FOLDER'], "extract.txt"), "r", encoding="utf-8") as f:
                 extracted_text = f.read()
 
-    return render_template("index.html", text=extracted_text, summary=summary_text)
+    return render_template("index.html", text=extracted_text, summary=summary_text, bullets=bullet_text)
 
 
 if __name__ == "__main__":
