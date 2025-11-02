@@ -1,16 +1,17 @@
 import os
 import math
-from flask import Flask, render_template, request
+import streamlit as st
 from moviepy import VideoFileClip, AudioFileClip
 import speech_recognition as sr
 from transformers import PegasusTokenizer, PegasusForConditionalGeneration
-from flask import send_file
 
+st.set_page_config(page_title="Video-Summarizer", layout="wide")
 
-
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = "static/uploads"
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+# -----------------------------
+# Setup paths
+# -----------------------------
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # -----------------------------
 # Load Pegasus model once
@@ -18,18 +19,23 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.environ["HF_TOKEN"] = ""
 model_name = "google/pegasus-cnn_dailymail"
 
-print("🔹 Loading Pegasus model...")
-tokenizer = PegasusTokenizer.from_pretrained(model_name, token=os.environ.get("HF_TOKEN"))
-model = PegasusForConditionalGeneration.from_pretrained(model_name, token=os.environ.get("HF_TOKEN"))
+@st.cache_resource
+def load_model():
+    st.write("🔹 Loading Pegasus model...")
+    tokenizer = PegasusTokenizer.from_pretrained(model_name, token=os.environ.get("HF_TOKEN"))
+    model = PegasusForConditionalGeneration.from_pretrained(model_name, token=os.environ.get("HF_TOKEN"))
+    return tokenizer, model
+
+tokenizer, model = load_model()
 
 
 # -----------------------------
 # Helper: Extract Audio
 # -----------------------------
 def extract_audio(video_path):
-    output_path = os.path.join(app.config['UPLOAD_FOLDER'], "audio.mp3")
+    output_path = os.path.join(UPLOAD_FOLDER, "audio.mp3")
     clip = VideoFileClip(video_path)
-    clip.audio.write_audiofile(output_path)
+    clip.audio.write_audiofile(output_path, logger=None)
     clip.close()
     return output_path
 
@@ -39,35 +45,35 @@ def extract_audio(video_path):
 # -----------------------------
 def convert_and_transcribe(audio_mp3):
     recognizer = sr.Recognizer()
-    audio_wav = os.path.join(app.config['UPLOAD_FOLDER'], "audio.wav")
+    audio_wav = os.path.join(UPLOAD_FOLDER, "audio.wav")
 
-    print("🎵 Converting MP3 to WAV using moviepy...")
+    st.info("🎵 Converting MP3 to WAV...")
     clip = AudioFileClip(audio_mp3)
-    clip.write_audiofile(audio_wav)
+    clip.write_audiofile(audio_wav, logger=None)
     clip.close()
 
     text_output = ""
     with sr.AudioFile(audio_wav) as source:
         total_duration = source.DURATION
-        print(f"⏱️ Total duration: {total_duration:.2f} seconds")
 
     chunk_length = 30
     num_chunks = math.ceil(total_duration / chunk_length)
 
+    st.info(f"🎙️ Processing {num_chunks} chunks...")
+
     for i in range(num_chunks):
         start = i * chunk_length
         end = min((i + 1) * chunk_length, total_duration)
-        print(f"🧩 Processing chunk {i+1}/{num_chunks} ({start:.1f}-{end:.1f}s)")
-
+        st.write(f"🧩 Chunk {i+1}/{num_chunks} ({start:.1f}-{end:.1f}s)")
         with sr.AudioFile(audio_wav) as src:
             audio_data = recognizer.record(src, offset=start, duration=end - start)
             try:
                 chunk_text = recognizer.recognize_google(audio_data)
                 text_output += chunk_text + " "
             except sr.UnknownValueError:
-                print(f"⚠️ Chunk {i+1} unclear — skipped.")
+                st.warning(f"⚠️ Chunk {i+1} unclear — skipped.")
             except sr.RequestError as e:
-                print(f"❌ Google request error: {e}")
+                st.error(f"❌ Google API error: {e}")
                 break
 
     return text_output.strip()
@@ -76,17 +82,11 @@ def convert_and_transcribe(audio_mp3):
 # -----------------------------
 # Helper: Summarize text
 # -----------------------------
-def summarize_text(input_file="static/uploads/extract.txt", output_file="static/uploads/summary.txt"):
-    if not os.path.exists(input_file):
-        return "❌ 'extract.txt' not found."
-
-    with open(input_file, "r", encoding="utf-8") as f:
-        text = f.read().strip()
-
+def summarize_text(text):
     if not text:
-        return "⚠️ 'extract.txt' is empty — nothing to summarize."
+        return "⚠️ No extracted text found."
 
-    print("📄 Summarizing extracted text...")
+    st.info("📄 Summarizing extracted text...")
     inputs = tokenizer(text, truncation=True, padding="longest", return_tensors="pt")
 
     summary_ids = model.generate(
@@ -99,116 +99,55 @@ def summarize_text(input_file="static/uploads/extract.txt", output_file="static/
     )
 
     summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(summary)
-
-    print(f"💾 Summary saved to '{output_file}'")
     return summary
 
 
 # -----------------------------
 # Helper: Convert summary → bullet points
 # -----------------------------
-def convert_to_bullets(summary_file="static/uploads/summary.txt", output_file="static/uploads/bullet_summary.txt"):
-    if not os.path.exists(summary_file):
-        return "❌ 'summary.txt' not found."
-
-    with open(summary_file, "r", encoding="utf-8") as f:
-        summary = f.read().strip()
-
-    summary = summary.replace("<n>", ". ")
-    sentences = [s.strip() for s in summary.split(".") if s.strip()]
-
+def convert_to_bullets(summary):
+    sentences = [s.strip() for s in summary.replace("<n>", ". ").split(".") if s.strip()]
     bullet_points = "\n".join([f"• {s}." for s in sentences])
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(bullet_points)
-
-    print(f"💾 Bullet-point summary saved to '{output_file}'")
     return bullet_points
 
 
 # -----------------------------
-# Routes
+# Streamlit UI
 # -----------------------------
-@app.route("/", methods=["GET", "POST"])
-def index():
-    extracted_text = None
-    summary_text = None
-    bullet_text = None
+st.title("Video Summarizer")
+st.markdown("Upload a video file — I’ll extract audio, transcribe speech, and summarize it into concise bullet points.")
 
-    if request.method == "POST":
-        # Check which button was pressed
-        if "video" in request.files:
-            file = request.files["video"]
-            if file:
-                video_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-                file.save(video_path)
+uploaded_file = st.file_uploader("Upload your video (MP4, MOV, or WebM)", type=["mp4", "mov", "webm"])
 
-                # Step 1: Extract Audio
-                audio_path = extract_audio(video_path)
+if uploaded_file is not None:
+    video_path = os.path.join(UPLOAD_FOLDER, uploaded_file.name)
+    with open(video_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-                # Step 2: Transcribe
-                extracted_text = convert_and_transcribe(audio_path)
+    st.video(video_path)
 
-                # Step 3: Save extracted text
-                with open(os.path.join(app.config['UPLOAD_FOLDER'], "extract.txt"), "w", encoding="utf-8") as f:
-                    f.write(extracted_text)
+    if st.button("▶️ Process Video"):
+        with st.spinner("Extracting audio..."):
+            audio_path = extract_audio(video_path)
+        with st.spinner("Transcribing speech..."):
+            extracted_text = convert_and_transcribe(audio_path)
 
-        elif "summarize" in request.form:
-            summary_text = summarize_text("static/uploads/extract.txt")
-            bullet_text = convert_to_bullets("static/uploads/summary.txt")
+        st.subheader("📝 Extracted Text")
+        st.text_area("Transcribed text", extracted_text, height=200)
 
-            # Read extracted text for display alongside summary
-            with open(os.path.join(app.config['UPLOAD_FOLDER'], "extract.txt"), "r", encoding="utf-8") as f:
-                extracted_text = f.read()
+        with st.spinner("Summarizing..."):
+            summary = summarize_text(extracted_text)
+            bullet_summary = convert_to_bullets(summary)
 
-    return render_template("index.html", text=extracted_text, summary=summary_text, bullets=bullet_text)
+        st.subheader("🧠 Summary")
+        st.text_area("Bullet Summary", bullet_summary, height=200)
 
-
-@app.route("/index2", methods=["GET", "POST"])
-def index2():
-    extracted_text = None
-    summary_text = None
-    bullet_text = None
-
-    if request.method == "POST":
-        if "recorded" in request.files:
-            file = request.files["recorded"]
-            if file:
-                video_path = os.path.join(app.config['UPLOAD_FOLDER'], "recorded.webm")
-                file.save(video_path)
-                print("🎥 Video recorded and uploaded successfully!")
-
-                # Step 1: Extract Audio
-                audio_path = extract_audio(video_path)
-
-                # Step 2: Transcribe
-                extracted_text = convert_and_transcribe(audio_path)
-
-                # Step 3: Save extracted text
-                with open(os.path.join(app.config['UPLOAD_FOLDER'], "extract.txt"), "w", encoding="utf-8") as f:
-                    f.write(extracted_text)
-
-                # Step 4: Summarize
-                summary_text = summarize_text("static/uploads/extract.txt")
-
-                # Step 5: Convert to bullet points
-                bullet_text = convert_to_bullets("static/uploads/summary.txt")
-
-    return render_template("index2.html", text=extracted_text, summary=summary_text, bullets=bullet_text)
-
-
-@app.route("/download_txt", methods=["POST"])
-def download_txt():
-    txt_path = os.path.join(app.config['UPLOAD_FOLDER'], "bullet_summary.txt")
-    
-    if not os.path.exists(txt_path):
-        return "❌ No bullet summary found. Please generate it first."
-    
-    return send_file(txt_path, as_attachment=True)
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
+        # Download option
+        st.download_button(
+            label="⬇️ Download Bullet Summary as TXT",
+            data=bullet_summary,
+            file_name="bullet_summary.txt",
+            mime="text/plain"
+        )
+else:
+    st.info("Please upload a video file to start.")
