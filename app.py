@@ -16,16 +16,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # -----------------------------
 # Load Pegasus model once
 # -----------------------------
-os.environ["HF_TOKEN"] = ""
-model_name = "google/pegasus-cnn_dailymail"
+HF_TOKEN = st.secrets["HF_TOKEN"]
+MODEL_NAME = "google/pegasus-cnn_dailymail"
 
 @st.cache_resource
 def load_model():
     st.write("🔹 Loading Pegasus model...")
-    tokenizer = PegasusTokenizer.from_pretrained(model_name, token=os.environ.get("HF_TOKEN"))
-    model = PegasusForConditionalGeneration.from_pretrained(model_name, token=os.environ.get("HF_TOKEN"))
+    tokenizer = PegasusTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+    model = PegasusForConditionalGeneration.from_pretrained(MODEL_NAME, token=HF_TOKEN)
     return tokenizer, model
-
+    
 tokenizer, model = load_model()
 
 
